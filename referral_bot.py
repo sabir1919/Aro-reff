@@ -1,140 +1,141 @@
 import requests
+import time
 import random
 import string
-import time
 import csv
 import os
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import cycle
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# -----------------------------
+# CONFIG
+# -----------------------------
+API_KEY = "YOUR_2CAPTCHA_API_KEY"  # <-- put your 2Captcha key here
+SITE_KEY = "6LdsmFYUAAAAACkQ2e6vGJMdVkp_xxxxxxxxxx"  # <-- from HAR
+PAGE_URL = "https://dashboard.aro.network/"
+REGISTER_URL = "https://preview-api.aro.network/api/auth/register"
 REFERRAL_CODE = "GJMDVK"
-REGISTER_URL = "https://api.aro.network/api/auth/register"
+
+THREADS = 5
+TIMEOUT = 30
 OUTPUT_FILE = "referrals.csv"
-THREADS = 10        # number of parallel workers
-MAX_RETRIES = 3     # retries before switching proxy
-TIMEOUT = 25        # request timeout
-DEFAULT_LIMIT = 50  # fallback if no argument given
 
 # -----------------------------
-# Utility Functions
+# Captcha Solver
 # -----------------------------
-def load_proxies(path="proxies.txt"):
-    with open(path) as f:
-        proxies = [line.strip() for line in f if line.strip()]
-    return proxies, cycle(proxies)
+def solve_captcha(api_key, site_key, url):
+    s = requests.Session()
 
+    # 1. Submit captcha task
+    print("[*] Sending captcha to 2Captcha...")
+    resp = s.post("http://2captcha.com/in.php", {
+        "key": api_key,
+        "method": "userrecaptcha",
+        "googlekey": site_key,
+        "pageurl": url,
+        "json": 1
+    }).json()
+
+    if resp["status"] != 1:
+        raise Exception(f"2Captcha error: {resp}")
+
+    captcha_id = resp["request"]
+
+    # 2. Poll until solved
+    for _ in range(24):  # wait up to 2 minutes
+        time.sleep(5)
+        check = s.get("http://2captcha.com/res.php", params={
+            "key": api_key,
+            "action": "get",
+            "id": captcha_id,
+            "json": 1
+        }).json()
+        if check["status"] == 1:
+            print("[+] Captcha solved")
+            return check["request"]
+        elif check["request"] != "CAPCHA_NOT_READY":
+            raise Exception(f"2Captcha failed: {check}")
+    raise Exception("Captcha solving timeout")
+
+# -----------------------------
+# Helpers
+# -----------------------------
 def random_email():
-    user = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
-    return f"{user}@mail.com"
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=10)) + "@mail.com"
 
-def random_password(length=12):
-    chars = string.ascii_letters + string.digits + "!@#$%^&*"
-    return ''.join(random.choices(chars, k=length))
+def random_password():
+    return ''.join(random.choices(string.ascii_letters + string.digits + "!@#$%^&*", k=12))
 
-def random_wallet():
-    return "0x" + ''.join(random.choices("abcdef" + string.digits, k=40))
-
-def check_proxy(proxy):
+def load_proxies(path="proxies.txt"):
     try:
-        test = requests.get(
-            "https://api.aro.network/",
-            proxies={"http": f"http://{proxy}", "https": f"http://{proxy}"},
-            timeout=5
-        )
-        return test.status_code < 500
-    except:
-        return False
+        with open(path) as f:
+            proxies = [line.strip() for line in f if line.strip()]
+        return proxies
+    except FileNotFoundError:
+        return []
 
-def get_session(proxy=None):
-    session = requests.Session()
-    if proxy:
-        proxies = {
-            "http": f"http://{proxy}",
-            "https": f"http://{proxy}"
-        }
-        session.proxies.update(proxies)
-    return session
-
-# -----------------------------
-# Core Referral Function
-# -----------------------------
-def create_referral(proxy_pool):
-    for attempt in range(1, MAX_RETRIES + 1):
-        proxy = next(proxy_pool)
-        email = random_email()
-        password = random_password()
-        wallet = random_wallet()
-
-        payload = {
-            "email": email,
-            "password": password,
-            "walletAddress": wallet,
-            "inviteCode": REFERRAL_CODE
-        }
-
-        headers = {
-            "Content-Type": "application/json",
-            "Origin": "https://dashboard.aro.network",
-            "Referer": "https://dashboard.aro.network/",
-            "User-Agent": "Mozilla/5.0"
-        }
-
-        try:
-            session = get_session(proxy)
-            r = session.post(REGISTER_URL, headers=headers, json=payload, timeout=TIMEOUT)
-            status, response = r.status_code, r.text
-
-            save_to_csv([email, password, wallet, proxy, status, response[:200]])
-            return proxy, email, password, status, response[:80]
-
-        except Exception as e:
-            if attempt < MAX_RETRIES:
-                time.sleep(2)
-                continue
-            else:
-                save_to_csv([email, password, wallet, proxy, None, f"Failed after {MAX_RETRIES} retries: {e}"])
-                return proxy, email, password, None, str(e)
-
-    return None, email, password, None, "All retries failed"
-
-# -----------------------------
-# Save to CSV
-# -----------------------------
 def save_to_csv(data):
     file_exists = os.path.isfile(OUTPUT_FILE)
     with open(OUTPUT_FILE, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(["email", "password", "wallet", "proxy", "status", "response"])
+            writer.writerow(["email", "password", "proxy", "status", "response"])
         writer.writerow(data)
+
+# -----------------------------
+# Referral Creator
+# -----------------------------
+def create_referral(proxy=None):
+    email = random_email()
+    password = random_password()
+
+    try:
+        # Solve captcha
+        token = solve_captcha(API_KEY, SITE_KEY, PAGE_URL)
+
+        payload = {
+            "email": email,
+            "password": password,
+            "confirmPassword": password,
+            "inviteCode": REFERRAL_CODE,
+            "g-recaptcha-response": token
+        }
+
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        r = requests.post(REGISTER_URL, json=payload, timeout=TIMEOUT, proxies=proxies)
+
+        save_to_csv([email, password, proxy, r.status_code, r.text])
+        return proxy, email, password, r.status_code, r.text
+
+    except Exception as e:
+        save_to_csv([email, password, proxy, None, str(e)])
+        return proxy, email, password, None, str(e)
 
 # -----------------------------
 # Main Runner
 # -----------------------------
 if __name__ == "__main__":
-    # Read referral limit from CLI or use default
-    if len(sys.argv) > 1 and sys.argv[1].isdigit():
-        REFERRAL_LIMIT = int(sys.argv[1])
+    # Referral limit from command line
+    if len(sys.argv) > 1:
+        try:
+            REFERRAL_LIMIT = int(sys.argv[1])
+        except:
+            print("Usage: python referral_bot.py <referral_limit>")
+            sys.exit(1)
     else:
-        REFERRAL_LIMIT = DEFAULT_LIMIT
+        REFERRAL_LIMIT = 10
 
     print(f"[+] Referral limit set to {REFERRAL_LIMIT}")
 
-    proxies, proxy_pool = load_proxies()
+    # Load proxies
+    proxies = load_proxies()
     print(f"[+] Loaded {len(proxies)} proxies")
+    proxy_pool = cycle(proxies) if proxies else cycle([None])
 
-    working_proxies = [p for p in proxies if check_proxy(p)]
-    if working_proxies:
-        print(f"[+] {len(working_proxies)} working proxies found")
-        proxy_pool = cycle(working_proxies)
-    else:
-        print("[!] No working proxies found, falling back to direct connection")
-        proxy_pool = cycle([None])
-
+    # Run referrals
     with ThreadPoolExecutor(max_workers=THREADS) as executor:
-        futures = [executor.submit(create_referral, proxy_pool) for _ in range(REFERRAL_LIMIT)]
-
+        futures = [executor.submit(create_referral, next(proxy_pool)) for _ in range(REFERRAL_LIMIT)]
         for future in as_completed(futures):
             proxy, email, password, status, response = future.result()
-            print(f"[{proxy}] {email}:{password} -> {status} | {response}")
+            print(f"[{proxy}] {email}:{password} -> {status} | {response[:200]}")
