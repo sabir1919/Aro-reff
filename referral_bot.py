@@ -8,10 +8,10 @@ import time
 # CONFIG
 # -----------------------------
 API_KEY = "YOUR_2CAPTCHA_API_KEY"   # <-- put your 2Captcha key here
-SITE_KEY = "6LcQP5UrAAAAAI-Np2csPGUigYvwUCrnu7eVQRwM"  # from site
+SITE_KEY = "6LcQP5UrAAAAAI-Np2csPGUigYvwUCrnu7eVQRwM"  # from signup form
 PAGE_URL = "https://dashboard.aro.network/"
-REGISTER_URL = "https://preview-api.aro.network/api/user/signUpProd"  # <-- FIXED ENDPOINT
-REFERRAL_CODE = "GJMDVK"  # <-- put your referral code here
+REGISTER_URL = "https://preview-api.aro.network/api/user/signUpProd"
+REFERRAL_CODE = "GJMDVK"
 PROXIES_FILE = "proxies.txt"
 
 # -----------------------------
@@ -35,14 +35,22 @@ def load_proxies():
         print("[!] No proxies.txt found, using direct connection only")
         return []
 
-def solve_captcha(api_key, site_key, url):
-    print("[*] Sending captcha to 2Captcha...")
+def solve_captcha(api_key, site_key, url, enterprise=False):
+    print(f"[*] Sending captcha to 2Captcha... (enterprise={enterprise})")
     s = requests.Session()
-    resp = s.get(
-        "http://2captcha.com/in.php",
-        params={"key": api_key, "method": "userrecaptcha", "googlekey": site_key, "pageurl": url}
-    )
+    params = {
+        "key": api_key,
+        "method": "userrecaptcha",
+        "googlekey": site_key,
+        "pageurl": url
+    }
+    if enterprise:
+        params["enterprise"] = 1
+        params["version"] = "v3"
+
+    resp = s.get("http://2captcha.com/in.php", params=params)
     if "OK|" not in resp.text:
+        print("[!] 2Captcha in.php error:", resp.text)
         return None
     captcha_id = resp.text.split("|")[1]
 
@@ -59,11 +67,11 @@ def solve_captcha(api_key, site_key, url):
     print("[!] Captcha timeout")
     return None
 
-def try_register(session, proxy=None):
+def try_register(session, proxy=None, enterprise=False):
     email = random_email()
     password = random_password()
 
-    token = solve_captcha(API_KEY, SITE_KEY, PAGE_URL)
+    token = solve_captcha(API_KEY, SITE_KEY, PAGE_URL, enterprise=enterprise)
     if not token:
         return None, None, "Captcha failed"
 
@@ -72,7 +80,7 @@ def try_register(session, proxy=None):
         "password": password,
         "confirmPassword": password,
         "inviteCode": REFERRAL_CODE,
-        "recaptchaToken": token   # <-- FIXED FIELD NAME
+        "recaptchaToken": token   # <-- must match HAR
     }
 
     headers = {
@@ -84,10 +92,7 @@ def try_register(session, proxy=None):
 
     proxies = None
     if proxy:
-        proxies = {
-            "http": f"http://{proxy}",
-            "https": f"http://{proxy}"
-        }
+        proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"}
 
     try:
         r = session.post(REGISTER_URL, json=payload, headers=headers, proxies=proxies, timeout=20)
@@ -100,12 +105,13 @@ def try_register(session, proxy=None):
 # -----------------------------
 if __name__ == "__main__":
     limit = int(sys.argv[1]) if len(sys.argv) > 1 else 1
-    print(f"[+] Referral limit set to {limit}")
+    enterprise = "--enterprise" in sys.argv
+    print(f"[+] Referral limit set to {limit} (enterprise={enterprise})")
 
     proxies = load_proxies()
     session = requests.Session()
 
     for i in range(limit):
         proxy = proxies[i % len(proxies)] if proxies else None
-        email, password, result = try_register(session, proxy)
+        email, password, result = try_register(session, proxy, enterprise=enterprise)
         print(f"[{proxy}] {email}:{password} -> {result}")
