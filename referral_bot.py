@@ -10,7 +10,7 @@ import time
 API_KEY = "YOUR_2CAPTCHA_API_KEY"   # <-- put your 2Captcha key here
 SITE_KEY = "6LcQP5UrAAAAAI-Np2csPGUigYvwUCrnu7eVQRwM"  # from site
 PAGE_URL = "https://dashboard.aro.network/"
-REGISTER_URL = "https://preview-api.aro.network/api/user/signUpProd"  # <-- FIXED
+REGISTER_URL = "https://preview-api.aro.network/api/user/signUpProd"  # <-- FIXED ENDPOINT
 REFERRAL_CODE = "GJMDVK"  # <-- put your referral code here
 PROXIES_FILE = "proxies.txt"
 
@@ -38,7 +38,6 @@ def load_proxies():
 def solve_captcha(api_key, site_key, url):
     print("[*] Sending captcha to 2Captcha...")
     s = requests.Session()
-    # send solve request
     resp = s.get(
         "http://2captcha.com/in.php",
         params={"key": api_key, "method": "userrecaptcha", "googlekey": site_key, "pageurl": url}
@@ -73,7 +72,7 @@ def try_register(session, proxy=None):
         "password": password,
         "confirmPassword": password,
         "inviteCode": REFERRAL_CODE,
-        "g-recaptcha-response": token
+        "recaptchaToken": token   # <-- FIXED FIELD NAME
     }
 
     headers = {
