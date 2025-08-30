@@ -6,37 +6,14 @@ import json
 import time
 from itertools import cycle
 
-# ================== CONFIG ==================
-API_SIGNUP_URL = "https://preview-api.aro.network/api/user/signUpProd"
-HAR_FILE = "dashboard.aro.network.har"
 
-CAPTCHA_SITEKEY = "6LcQP5UrAAAAAI-Np2csPGUigYvwUCrnu7eVQRwM"
-CAPTCHA_URL = "https://dashboard.aro.network"
-CAPTCHA_API_KEY = "YOUR_2CAPTCHA_API_KEY"
-# ============================================
-
-
-def extract_data_s(har_file=HAR_FILE):
-    """Extract the latest data-s token from HAR export"""
+def load_config():
     try:
-        with open(har_file, "r", encoding="utf-8") as f:
-            har = json.load(f)
-
-        for entry in har["log"]["entries"]:
-            req = entry["request"]
-            if "postData" in req and "text" in req["postData"]:
-                text = req["postData"]["text"]
-                if "data-s=" in text:
-                    for part in text.split("&"):
-                        if part.startswith("data-s="):
-                            token = part.split("=", 1)[1]
-                            print(f"[+] Extracted data-s: {token[:60]}...")
-                            return token
-        print("[!] No data-s found in HAR")
-        return None
+        with open("config.json", "r") as f:
+            return json.load(f)
     except Exception as e:
-        print(f"[!] Failed to read HAR: {e}")
-        return None
+        print("[!] Failed to read config.json:", e)
+        sys.exit(1)
 
 
 def random_email():
@@ -48,15 +25,15 @@ def random_password():
     return ''.join(random.choices(chars, k=12))
 
 
-def solve_captcha():
+def solve_captcha(cfg):
     print("[*] Sending captcha to 2Captcha... (enterprise=True)")
     try:
         r = requests.post("http://2captcha.com/in.php", data={
-            "key": CAPTCHA_API_KEY,
+            "key": cfg["captcha_api_key"],
             "method": "userrecaptcha",
-            "googlekey": CAPTCHA_SITEKEY,
+            "googlekey": cfg["captcha_sitekey"],
             "enterprise": 1,
-            "pageurl": CAPTCHA_URL,
+            "pageurl": cfg["captcha_url"],
             "json": 1
         })
         rid = r.json().get("request")
@@ -65,11 +42,11 @@ def solve_captcha():
             print("[!] 2Captcha error:", r.json())
             return None
 
-        # Wait for solution
+        # Poll result
         for _ in range(20):
             time.sleep(5)
             res = requests.get("http://2captcha.com/res.php", params={
-                "key": CAPTCHA_API_KEY,
+                "key": cfg["captcha_api_key"],
                 "action": "get",
                 "id": rid,
                 "json": 1
@@ -85,21 +62,22 @@ def solve_captcha():
 
 
 def main(referral_limit):
-    proxies = ["156.253.171.251:3129"]  # Example proxy
-    proxy_pool = cycle(proxies)
+    cfg = load_config()
+    proxies = cfg.get("proxies", [])
+    proxy_pool = cycle(proxies) if proxies else cycle([None])
 
     print(f"[+] Referral limit set to {referral_limit}")
     print(f"[+] Loaded {len(proxies)} proxies")
 
-    data_s = extract_data_s()
+    data_s = cfg.get("data_s")
     if not data_s:
-        print("[!] No data-s available, aborting.")
+        print("[!] No data-s in config.json, aborting.")
         return
 
     for i in range(referral_limit):
         email = random_email()
         password = random_password()
-        captcha_token = solve_captcha()
+        captcha_token = solve_captcha(cfg)
         if not captcha_token:
             print(f"[{i}] Captcha failed")
             continue
@@ -113,10 +91,12 @@ def main(referral_limit):
         }
 
         proxy = next(proxy_pool)
-        proxies_dict = {"http": f"http://{proxy}", "https": f"http://{proxy}"}
+        proxies_dict = None
+        if proxy:
+            proxies_dict = {"http": f"http://{proxy}", "https": f"http://{proxy}"}
 
         try:
-            r = requests.post(API_SIGNUP_URL, json=payload, proxies=proxies_dict, timeout=20)
+            r = requests.post(cfg["api_signup_url"], json=payload, proxies=proxies_dict, timeout=20)
             print(f"[{proxy}] {email}:{password} -> {r.status_code} | {r.text[:200]}")
         except Exception as e:
             print(f"[{proxy}] {email}:{password} -> ERROR | {e}")
