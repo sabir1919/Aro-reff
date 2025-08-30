@@ -1,0 +1,8 @@
+{
+  "API_KEY": "YOUR_2CAPTCHA_KEY",
+  "SITE_KEY": "6LcQP5UrAAAAAI-Np2csPGUigYvwUCrnu7eVQRwM",
+  "PAGE_URL": "https://dashboard.aro.network/auth/signup",
+  "REGISTER_URL": "https://preview-api.aro.network/api/user/signUpProd",
+  "REFERRAL_CODE": "GJMDVK",
+  "DATA_S": "AEu4Qfa8AAAAANuGch9EyK8UoHcTHTY3kYX0v6L4dytvDqX7C1X3Jc2Z5lhr0gSeQ-4RbgP6mY4Zx3sYh0j1v6gP1wFQ"
+}
