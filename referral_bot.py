@@ -3,18 +3,27 @@ import random
 import string
 import sys
 import time
+import json
+import os
 
 # -----------------------------
 # CONFIG
 # -----------------------------
-API_KEY = "YOUR_2CAPTCHA_API_KEY"   # <-- put your 2Captcha key here
-SITE_KEY = "6LcQP5UrAAAAAI-Np2csPGUigYvwUCrnu7eVQRwM"  # from signup form
-PAGE_URL = "https://dashboard.aro.network/"
-REGISTER_URL = "https://preview-api.aro.network/api/user/signUpProd"
-REFERRAL_CODE = "GJMDVK"
+CONFIG_FILE = "config.json"
 
-# !!! IMPORTANT !!!
-DATA_S = "PASTE-YOUR-DATA-S-HERE"  # <-- copy from HAR (reCAPTCHA widget "data-s" value)
+if not os.path.exists(CONFIG_FILE):
+    print("[!] config.json not found. Please create it with your settings.")
+    sys.exit(1)
+
+with open(CONFIG_FILE, "r") as f:
+    cfg = json.load(f)
+
+API_KEY = cfg.get("API_KEY", "")
+SITE_KEY = cfg.get("SITE_KEY", "")
+PAGE_URL = cfg.get("PAGE_URL", "https://dashboard.aro.network/auth/signup")
+REGISTER_URL = cfg.get("REGISTER_URL", "https://preview-api.aro.network/api/user/signUpProd")
+REFERRAL_CODE = cfg.get("REFERRAL_CODE", "")
+DATA_S = cfg.get("DATA_S", "")
 
 PROXIES_FILE = "proxies.txt"
 
@@ -63,8 +72,10 @@ def solve_captcha(api_key, site_key, url, enterprise=True):
         time.sleep(5)
         r = s.get("http://2captcha.com/res.php", params={"key": api_key, "action": "get", "id": captcha_id})
         if r.text.startswith("OK|"):
-            print("[+] Captcha solved")
-            return r.text.split("|")[1]
+            token = r.text.split("|")[1]
+            print("[+] Captcha solved. Token:")
+            print(token)  # log full token
+            return token
         elif r.text != "CAPCHA_NOT_READY":
             print("[!] 2Captcha error:", r.text)
             return None
@@ -84,13 +95,13 @@ def try_register(session, proxy=None):
         "password": password,
         "confirmPassword": password,
         "inviteCode": REFERRAL_CODE,
-        "recaptchaToken": token   # <-- must match HAR
+        "recaptchaToken": token
     }
 
     headers = {
         "Content-Type": "application/json",
         "Origin": "https://dashboard.aro.network",
-        "Referer": "https://dashboard.aro.network/",
+        "Referer": "https://dashboard.aro.network/auth/signup",
         "User-Agent": "Mozilla/5.0"
     }
 
@@ -100,7 +111,7 @@ def try_register(session, proxy=None):
 
     try:
         r = session.post(REGISTER_URL, json=payload, headers=headers, proxies=proxies, timeout=20)
-        return email, password, f"{r.status_code} | {r.text[:200]}"
+        return email, password, f"{r.status_code} | {r.text[:300]}"
     except Exception as e:
         return email, password, f"Error: {e}"
 
