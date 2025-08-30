@@ -2,130 +2,129 @@ import requests
 import random
 import string
 import sys
-import time
 import json
-import os
+import time
+from itertools import cycle
 
-# -----------------------------
-# CONFIG
-# -----------------------------
-CONFIG_FILE = "config.json"
+# ================== CONFIG ==================
+API_SIGNUP_URL = "https://preview-api.aro.network/api/user/signUpProd"
+HAR_FILE = "dashboard.aro.network.har"
 
-if not os.path.exists(CONFIG_FILE):
-    print("[!] config.json not found. Please create it with your settings.")
-    sys.exit(1)
+CAPTCHA_SITEKEY = "6LcQP5UrAAAAAI-Np2csPGUigYvwUCrnu7eVQRwM"
+CAPTCHA_URL = "https://dashboard.aro.network"
+CAPTCHA_API_KEY = "YOUR_2CAPTCHA_API_KEY"
+# ============================================
 
-with open(CONFIG_FILE, "r") as f:
-    cfg = json.load(f)
 
-API_KEY = cfg.get("API_KEY", "")
-SITE_KEY = cfg.get("SITE_KEY", "")
-PAGE_URL = cfg.get("PAGE_URL", "https://dashboard.aro.network/auth/signup")
-REGISTER_URL = cfg.get("REGISTER_URL", "https://preview-api.aro.network/api/user/signUpProd")
-REFERRAL_CODE = cfg.get("REFERRAL_CODE", "")
-DATA_S = cfg.get("DATA_S", "")
+def extract_data_s(har_file=HAR_FILE):
+    """Extract the latest data-s token from HAR export"""
+    try:
+        with open(har_file, "r", encoding="utf-8") as f:
+            har = json.load(f)
 
-PROXIES_FILE = "proxies.txt"
+        for entry in har["log"]["entries"]:
+            req = entry["request"]
+            if "postData" in req and "text" in req["postData"]:
+                text = req["postData"]["text"]
+                if "data-s=" in text:
+                    for part in text.split("&"):
+                        if part.startswith("data-s="):
+                            token = part.split("=", 1)[1]
+                            print(f"[+] Extracted data-s: {token[:60]}...")
+                            return token
+        print("[!] No data-s found in HAR")
+        return None
+    except Exception as e:
+        print(f"[!] Failed to read HAR: {e}")
+        return None
 
-# -----------------------------
-# HELPERS
-# -----------------------------
+
 def random_email():
-    name = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
-    return f"{name}@mail.com"
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=10)) + "@mail.com"
+
 
 def random_password():
     chars = string.ascii_letters + string.digits + "!@#$%^&*"
     return ''.join(random.choices(chars, k=12))
 
-def load_proxies():
+
+def solve_captcha():
+    print("[*] Sending captcha to 2Captcha... (enterprise=True)")
     try:
-        with open(PROXIES_FILE, "r") as f:
-            proxies = [p.strip() for p in f if p.strip()]
-        print(f"[+] Loaded {len(proxies)} proxies")
-        return proxies
-    except FileNotFoundError:
-        print("[!] No proxies.txt found, using direct connection only")
-        return []
+        r = requests.post("http://2captcha.com/in.php", data={
+            "key": CAPTCHA_API_KEY,
+            "method": "userrecaptcha",
+            "googlekey": CAPTCHA_SITEKEY,
+            "enterprise": 1,
+            "pageurl": CAPTCHA_URL,
+            "json": 1
+        })
+        rid = r.json().get("request")
 
-def solve_captcha(api_key, site_key, url, enterprise=True):
-    print(f"[*] Sending captcha to 2Captcha... (enterprise={enterprise})")
-    s = requests.Session()
-    params = {
-        "key": api_key,
-        "method": "userrecaptcha",
-        "googlekey": site_key,
-        "pageurl": url
-    }
-    if enterprise:
-        params["enterprise"] = 1
-        params["data-s"] = DATA_S
-
-    resp = s.get("http://2captcha.com/in.php", params=params)
-    if "OK|" not in resp.text:
-        print("[!] 2Captcha in.php error:", resp.text)
-        return None
-    captcha_id = resp.text.split("|")[1]
-
-    # poll for result
-    for _ in range(20):
-        time.sleep(5)
-        r = s.get("http://2captcha.com/res.php", params={"key": api_key, "action": "get", "id": captcha_id})
-        if r.text.startswith("OK|"):
-            token = r.text.split("|")[1]
-            print("[+] Captcha solved. Token:")
-            print(token)  # log full token
-            return token
-        elif r.text != "CAPCHA_NOT_READY":
-            print("[!] 2Captcha error:", r.text)
+        if r.json().get("status") != 1:
+            print("[!] 2Captcha error:", r.json())
             return None
-    print("[!] Captcha timeout")
-    return None
 
-def try_register(session, proxy=None):
-    email = random_email()
-    password = random_password()
-
-    token = solve_captcha(API_KEY, SITE_KEY, PAGE_URL, enterprise=True)
-    if not token:
-        return None, None, "Captcha failed"
-
-    payload = {
-        "email": email,
-        "password": password,
-        "confirmPassword": password,
-        "inviteCode": REFERRAL_CODE,
-        "recaptchaToken": token
-    }
-
-    headers = {
-        "Content-Type": "application/json",
-        "Origin": "https://dashboard.aro.network",
-        "Referer": "https://dashboard.aro.network/auth/signup",
-        "User-Agent": "Mozilla/5.0"
-    }
-
-    proxies = None
-    if proxy:
-        proxies = {"http": f"http://{proxy}", "https": f"http://{proxy}"}
-
-    try:
-        r = session.post(REGISTER_URL, json=payload, headers=headers, proxies=proxies, timeout=20)
-        return email, password, f"{r.status_code} | {r.text[:300]}"
+        # Wait for solution
+        for _ in range(20):
+            time.sleep(5)
+            res = requests.get("http://2captcha.com/res.php", params={
+                "key": CAPTCHA_API_KEY,
+                "action": "get",
+                "id": rid,
+                "json": 1
+            }).json()
+            if res.get("status") == 1:
+                print("[+] Captcha solved. Token:", res["request"][:80], "...")
+                return res["request"]
+        print("[!] Captcha solving timeout")
+        return None
     except Exception as e:
-        return email, password, f"Error: {e}"
+        print("[!] 2Captcha error:", e)
+        return None
 
-# -----------------------------
-# MAIN
-# -----------------------------
+
+def main(referral_limit):
+    proxies = ["156.253.171.251:3129"]  # Example proxy
+    proxy_pool = cycle(proxies)
+
+    print(f"[+] Referral limit set to {referral_limit}")
+    print(f"[+] Loaded {len(proxies)} proxies")
+
+    data_s = extract_data_s()
+    if not data_s:
+        print("[!] No data-s available, aborting.")
+        return
+
+    for i in range(referral_limit):
+        email = random_email()
+        password = random_password()
+        captcha_token = solve_captcha()
+        if not captcha_token:
+            print(f"[{i}] Captcha failed")
+            continue
+
+        payload = {
+            "email": email,
+            "password": password,
+            "confirmPassword": password,
+            "captcha": captcha_token,
+            "data-s": data_s
+        }
+
+        proxy = next(proxy_pool)
+        proxies_dict = {"http": f"http://{proxy}", "https": f"http://{proxy}"}
+
+        try:
+            r = requests.post(API_SIGNUP_URL, json=payload, proxies=proxies_dict, timeout=20)
+            print(f"[{proxy}] {email}:{password} -> {r.status_code} | {r.text[:200]}")
+        except Exception as e:
+            print(f"[{proxy}] {email}:{password} -> ERROR | {e}")
+
+
 if __name__ == "__main__":
-    limit = int(sys.argv[1]) if len(sys.argv) > 1 else 1
-    print(f"[+] Referral limit set to {limit}")
-
-    proxies = load_proxies()
-    session = requests.Session()
-
-    for i in range(limit):
-        proxy = proxies[i % len(proxies)] if proxies else None
-        email, password, result = try_register(session, proxy)
-        print(f"[{proxy}] {email}:{password} -> {result}")
+    if len(sys.argv) > 1:
+        limit = int(sys.argv[1])
+    else:
+        limit = 1
+    main(limit)
