@@ -12,6 +12,10 @@ SITE_KEY = "6LcQP5UrAAAAAI-Np2csPGUigYvwUCrnu7eVQRwM"  # from signup form
 PAGE_URL = "https://dashboard.aro.network/"
 REGISTER_URL = "https://preview-api.aro.network/api/user/signUpProd"
 REFERRAL_CODE = "GJMDVK"
+
+# !!! IMPORTANT !!!
+DATA_S = "PASTE-YOUR-DATA-S-HERE"  # <-- copy from HAR (reCAPTCHA widget "data-s" value)
+
 PROXIES_FILE = "proxies.txt"
 
 # -----------------------------
@@ -35,7 +39,7 @@ def load_proxies():
         print("[!] No proxies.txt found, using direct connection only")
         return []
 
-def solve_captcha(api_key, site_key, url, enterprise=False):
+def solve_captcha(api_key, site_key, url, enterprise=True):
     print(f"[*] Sending captcha to 2Captcha... (enterprise={enterprise})")
     s = requests.Session()
     params = {
@@ -46,7 +50,7 @@ def solve_captcha(api_key, site_key, url, enterprise=False):
     }
     if enterprise:
         params["enterprise"] = 1
-        params["version"] = "v3"
+        params["data-s"] = DATA_S
 
     resp = s.get("http://2captcha.com/in.php", params=params)
     if "OK|" not in resp.text:
@@ -67,11 +71,11 @@ def solve_captcha(api_key, site_key, url, enterprise=False):
     print("[!] Captcha timeout")
     return None
 
-def try_register(session, proxy=None, enterprise=False):
+def try_register(session, proxy=None):
     email = random_email()
     password = random_password()
 
-    token = solve_captcha(API_KEY, SITE_KEY, PAGE_URL, enterprise=enterprise)
+    token = solve_captcha(API_KEY, SITE_KEY, PAGE_URL, enterprise=True)
     if not token:
         return None, None, "Captcha failed"
 
@@ -105,13 +109,12 @@ def try_register(session, proxy=None, enterprise=False):
 # -----------------------------
 if __name__ == "__main__":
     limit = int(sys.argv[1]) if len(sys.argv) > 1 else 1
-    enterprise = "--enterprise" in sys.argv
-    print(f"[+] Referral limit set to {limit} (enterprise={enterprise})")
+    print(f"[+] Referral limit set to {limit}")
 
     proxies = load_proxies()
     session = requests.Session()
 
     for i in range(limit):
         proxy = proxies[i % len(proxies)] if proxies else None
-        email, password, result = try_register(session, proxy, enterprise=enterprise)
+        email, password, result = try_register(session, proxy)
         print(f"[{proxy}] {email}:{password} -> {result}")
